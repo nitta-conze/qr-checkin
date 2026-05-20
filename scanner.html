@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="permissions-policy" content="camera=*">
+<title>受付スキャン</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: sans-serif; background: #f5f5f5; color: #333; }
+  .header { background: #1a73e8; color: white; padding: 14px 16px; font-size: 16px; font-weight: 600; }
+  .container { padding: 16px; max-width: 480px; margin: 0 auto; }
+  video { width: 100%; border-radius: 12px; background: #000; }
+  canvas { display: none; }
+  .result { margin-top: 16px; padding: 20px; border-radius: 12px; text-align: center; font-size: 18px; font-weight: 600; min-height: 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+  .idle { background: #e8eaed; color: #5f6368; }
+  .ok { background: #e6f4ea; color: #137333; border: 2px solid #34a853; }
+  .ng { background: #fce8e6; color: #c5221f; border: 2px solid #ea4335; }
+  .warn { background: #fef7e0; color: #b06000; border: 2px solid #fbbc04; }
+  .sub { font-size: 14px; font-weight: 400; margin-top: 4px; }
+  .btn { display: block; width: 100%; padding: 12px; margin-top: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .btn-blue { background: #1a73e8; color: white; }
+  .btn-gray { background: #e8eaed; color: #333; }
+  .manual { display: flex; gap: 8px; margin-top: 16px; }
+  .manual input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
+  .manual button { padding: 10px 16px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+  .count { text-align: center; padding: 12px; background: white; border-radius: 8px; margin-top: 12px; font-size: 13px; color: #666; }
+  .count b { font-size: 20px; color: #1a73e8; }
+</style>
+</head>
+<body>
+<div class="header">📷 受付スキャン</div>
+<div class="container">
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="canvas"></canvas>
+
+  <div id="result" class="result idle">カメラ起動ボタンを押してください</div>
+
+  <button class="btn btn-blue" onclick="startCamera()">カメラ起動</button>
+  <button class="btn btn-gray" onclick="stopCamera()">停止</button>
+
+  <div class="count">本日のチェックイン: <b id="cnt">—</b> 人</div>
+
+  <div class="manual">
+    <input id="mid" placeholder="ID手入力でチェックイン">
+    <button onclick="doCheckin(document.getElementById('mid').value.trim())">送信</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script>
+// ここを自分のGASデプロイURLに書き換えてください
+const API = 'YOUR_GAS_URL';
+
+let scanning = false, lastId = '', lastTime = 0, stream = null;
+
+async function doCheckin(id) {
+  if (!id) return;
+  if (id === lastId && Date.now() - lastTime < 3000) return;
+  lastId = id; lastTime = Date.now();
+
+  const el = document.getElementById('result');
+  el.className = 'result idle'; el.innerHTML = '処理中...';
+
+  try {
+    const r = await fetch(`${API}?action=checkin&id=${encodeURIComponent(id)}`);
+    const d = await r.json();
+    if (d.ok) {
+      el.className = 'result ok';
+      el.innerHTML = `✅ チェックイン完了<div class="sub">${d.name} さん</div><div class="sub" style="font-size:12px">${d.program}</div>`;
+      updateCount();
+    } else if (d.reason === 'already') {
+      el.className = 'result warn';
+      el.innerHTML = `⚠️ チェックイン済み<div class="sub">${d.name} さん（${d.program}）</div>`;
+    } else {
+      el.className = 'result ng';
+      el.innerHTML = `❌ 見つかりません<div class="sub">ID: ${id}</div>`;
+    }
+    document.getElementById('mid').value = '';
+    setTimeout(() => { el.className = 'result idle'; el.innerHTML = 'QRコードをカメラに向けてください'; }, 4000);
+  } catch(e) {
+    el.className = 'result ng'; el.innerHTML = '通信エラー。接続を確認してください。';
+  }
+}
+
+async function updateCount() {
+  try {
+    const r = await fetch(`${API}?action=status`);
+    const d = await r.json();
+    document.getElementById('cnt').textContent = d.checked;
+  } catch(e) {}
+}
+
+function startCamera() {
+  const el = document.getElementById('result');
+  el.className = 'result idle'; el.innerHTML = 'カメラを起動中...';
+
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+    .then(s => {
+      stream = s;
+      const v = document.getElementById('video');
+      v.srcObject = s; v.play();
+      scanning = true;
+      el.className = 'result idle'; el.innerHTML = 'QRコードをカメラに向けてください';
+      scanLoop();
+      updateCount();
+    })
+    .catch(err => {
+      el.className = 'result ng';
+      el.innerHTML = `カメラエラー: ${err.message}`;
+    });
+}
+
+function stopCamera() {
+  scanning = false;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  document.getElementById('result').className = 'result idle';
+  document.getElementById('result').innerHTML = 'カメラ起動ボタンを押してください';
+}
+
+function scanLoop() {
+  if (!scanning) return;
+  const v = document.getElementById('video');
+  const c = document.getElementById('canvas');
+  if (v.readyState === v.HAVE_ENOUGH_DATA) {
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    const img = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+    const code = jsQR(img.data, img.width, img.height);
+    if (code) doCheckin(code.data);
+  }
+  setTimeout(scanLoop, 400);
+}
+</script>
+</body>
+</html>
