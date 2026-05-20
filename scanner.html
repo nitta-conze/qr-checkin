@@ -88,8 +88,11 @@ const r = await fetch(`${API}?action=checkin&id=${encodeURIComponent(id)}`, {
 
 async function updateCount() {
   try {
-    const r = await fetch(`${API}?action=status`);
-    const d = await r.json();
+const r = await fetch(`${API}?action=status`, {
+  method: 'GET',
+  mode: 'cors',
+  redirect: 'follow'
+});    const d = await r.json();
     document.getElementById('cnt').textContent = d.checked;
   } catch(e) {}
 }
