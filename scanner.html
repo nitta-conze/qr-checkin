@@ -63,8 +63,11 @@ async function doCheckin(id) {
   el.className = 'result idle'; el.innerHTML = '処理中...';
 
   try {
-    const r = await fetch(`${API}?action=checkin&id=${encodeURIComponent(id)}`);
-    const d = await r.json();
+const r = await fetch(`${API}?action=checkin&id=${encodeURIComponent(id)}`, {
+  method: 'GET',
+  mode: 'cors',
+  redirect: 'follow'
+});    const d = await r.json();
     if (d.ok) {
       el.className = 'result ok';
       el.innerHTML = `✅ チェックイン完了<div class="sub">${d.name} さん</div><div class="sub" style="font-size:12px">${d.program}</div>`;
