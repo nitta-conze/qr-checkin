@@ -9,7 +9,7 @@
   body { font-family: sans-serif; background: #f5f5f5; color: #333; }
   .header { background: #1a73e8; color: white; padding: 14px 16px; font-size: 16px; font-weight: 600; }
   .container { padding: 16px; max-width: 480px; margin: 0 auto; }
-  #preview { width: 100%; border-radius: 12px; background: #000; display: block; }
+  #preview { width: 100%; border-radius: 12px; background: #222; display: block; min-height: 200px; }
   .result { margin-top: 16px; padding: 20px; border-radius: 12px; text-align: center; font-size: 18px; font-weight: 600; min-height: 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
   .idle { background: #e8eaed; color: #5f6368; }
   .ok { background: #e6f4ea; color: #137333; border: 2px solid #34a853; }
@@ -24,18 +24,18 @@
   .manual button { padding: 10px 16px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
   .count { text-align: center; padding: 12px; background: white; border-radius: 8px; margin-top: 12px; font-size: 13px; color: #666; }
   .count b { font-size: 20px; color: #1a73e8; }
-  #debug { background: #fff3cd; border-radius: 8px; padding: 10px; margin-top: 12px; font-size: 11px; font-family: monospace; word-break: break-all; display: none; }
+  #log { background: #fff; border-radius: 8px; padding: 10px; margin-top: 12px; font-size: 11px; font-family: monospace; word-break: break-all; max-height: 120px; overflow-y: auto; }
 </style>
 </head>
 <body>
 <div class="header">📷 受付スキャン</div>
 <div class="container">
-
   <video id="preview" autoplay muted playsinline></video>
+  <canvas id="canvas" style="display:none"></canvas>
 
   <div id="result" class="result idle">カメラ起動ボタンを押してください</div>
 
-  <button class="btn btn-blue" onclick="startCamera()">カメラ起動</button>
+  <button class="btn btn-blue" id="startBtn" onclick="startCamera()">カメラ起動</button>
   <button class="btn btn-gray" onclick="stopCamera()">停止</button>
 
   <div class="count">チェックイン済: <b id="cnt">—</b> 人</div>
@@ -45,132 +45,106 @@
     <button onclick="doCheckin(document.getElementById('mid').value.trim())">送信</button>
   </div>
 
-  <div id="debug"></div>
+  <div id="log">ログ: 待機中...</div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"
+  onload="addLog('jsQR読み込み完了')"
+  onerror="addLog('jsQR読み込み失敗')">
+</script>
 <script>
-// ここを自分のGASデプロイURLに書き換えてください
 const API = 'https://script.google.com/macros/s/AKfycbwXBPSKFGhNmhohk9ervGcaRKqNkqxm8tQaM2-dTfjP2iHB1A3CjnxR0fz8f7v-CXresw/exec';
 
 let scanning = false;
 let lastId = '';
 let lastTime = 0;
 let stream = null;
-let animFrame = null;
+let timer = null;
 
-// QRコードデコーダー（ZXing使用）
-async function loadDecoder() {
-  return new Promise((resolve) => {
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.20.0/zxing.min.js';
-    script.onload = () => resolve(true);
-    script.onerror = () => resolve(false);
-    document.head.appendChild(script);
-  });
+function addLog(msg) {
+  const el = document.getElementById('log');
+  el.innerHTML = new Date().toLocaleTimeString() + ' ' + msg + '<br>' + el.innerHTML;
 }
 
-let codeReader = null;
-
 async function startCamera() {
+  addLog('カメラ起動開始');
   const el = document.getElementById('result');
   el.className = 'result idle';
   el.innerHTML = 'カメラを起動中...';
 
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    addLog('エラー: getUserMediaが使えません');
+    el.className = 'result ng';
+    el.innerHTML = 'このブラウザはカメラに対応していません';
+    return;
+  }
+
   try {
-    // ZXingを使ってQRコードを読み取る
-    if (!window.ZXing) {
-      await loadDecoder();
-    }
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    });
+    addLog('カメラ取得成功: ' + stream.getVideoTracks()[0].label);
 
-    if (window.ZXing) {
-      // ZXingが使える場合
-      const hints = new Map();
-      const formats = [window.ZXing.BarcodeFormat.QR_CODE];
-      hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-      codeReader = new window.ZXing.BrowserQRCodeReader(hints);
+    const v = document.getElementById('preview');
+    v.srcObject = stream;
+    await v.play();
+    addLog('映像再生開始 ' + v.videoWidth + 'x' + v.videoHeight);
 
-      const devices = await window.ZXing.BrowserCodeReader.listVideoInputDevices();
-      const backCamera = devices.find(d => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('rear') || d.label.toLowerCase().includes('environment')) || devices[devices.length - 1];
-      const deviceId = backCamera ? backCamera.deviceId : undefined;
+    scanning = true;
+    el.className = 'result idle';
+    el.innerHTML = 'QRコードをカメラに向けてください';
+    updateCount();
+    scanLoop();
 
-      codeReader.decodeFromVideoDevice(deviceId, 'preview', (result, err) => {
-        if (result) {
-          doCheckin(result.getText());
-        }
-      });
-
-      el.className = 'result idle';
-      el.innerHTML = 'QRコードをカメラに向けてください';
-      updateCount();
-
-    } else {
-      // ZXingが使えない場合はjsQRにフォールバック
-      fallbackToJsQR();
-    }
-
-  } catch(e) {
-    showDebug('ZXingエラー: ' + e.message);
-    fallbackToJsQR();
+  } catch(err) {
+    addLog('カメラエラー: ' + err.name + ' / ' + err.message);
+    el.className = 'result ng';
+    el.innerHTML = 'カメラエラー: ' + err.message;
   }
 }
 
-function fallbackToJsQR() {
-  const el = document.getElementById('result');
-  showDebug('jsQRにフォールバック中...');
-
-  // jsQRを動的に読み込む
-  const script = document.createElement('script');
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js';
-  script.onload = () => {
-    navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
-    }).then(s => {
-      stream = s;
-      const v = document.getElementById('preview');
-      v.srcObject = s;
-      v.play();
-      scanning = true;
-      el.className = 'result idle';
-      el.innerHTML = 'QRコードをカメラに向けてください';
-      document.getElementById('debug').style.display = 'none';
-      scanWithJsQR();
-      updateCount();
-    }).catch(err => {
-      el.className = 'result ng';
-      el.innerHTML = 'カメラエラー: ' + err.message;
-    });
-  };
-  document.head.appendChild(script);
-}
-
-function scanWithJsQR() {
+function scanLoop() {
   if (!scanning) return;
   const v = document.getElementById('preview');
+  const c = document.getElementById('canvas');
+
   if (v.readyState === v.HAVE_ENOUGH_DATA && v.videoWidth > 0) {
-    const canvas = document.createElement('canvas');
-    canvas.width = v.videoWidth;
-    canvas.height = v.videoHeight;
-    const ctx = canvas.getContext('2d');
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    const ctx = c.getContext('2d');
     ctx.drawImage(v, 0, 0);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(imageData.data, imageData.width, imageData.height, {
-      inversionAttempts: 'dontInvert'
-    });
-    if (code && code.data) {
-      doCheckin(code.data);
+
+    try {
+      const imageData = ctx.getImageData(0, 0, c.width, c.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'attemptBoth'
+      });
+      if (code && code.data) {
+        addLog('QR検出: ' + code.data);
+        doCheckin(code.data);
+      }
+    } catch(e) {
+      addLog('スキャンエラー: ' + e.message);
     }
+  } else {
+    addLog('映像待機中: readyState=' + v.readyState + ' w=' + v.videoWidth);
   }
-  animFrame = setTimeout(scanWithJsQR, 300);
+
+  timer = setTimeout(scanLoop, 500);
 }
 
 function stopCamera() {
   scanning = false;
-  if (animFrame) clearTimeout(animFrame);
-  if (codeReader) { try { codeReader.reset(); } catch(e) {} codeReader = null; }
+  if (timer) clearTimeout(timer);
   if (stream) stream.getTracks().forEach(t => t.stop());
   document.getElementById('preview').srcObject = null;
   document.getElementById('result').className = 'result idle';
   document.getElementById('result').innerHTML = 'カメラ起動ボタンを押してください';
+  addLog('カメラ停止');
 }
 
 async function doCheckin(id) {
@@ -182,16 +156,16 @@ async function doCheckin(id) {
   const el = document.getElementById('result');
   el.className = 'result idle';
   el.innerHTML = '処理中...';
+  addLog('チェックイン送信: ' + id);
 
   try {
-    const url = `${API}?action=checkin&id=${encodeURIComponent(id)}`;
-    const r = await fetch(url, {
+    const r = await fetch(`${API}?action=checkin&id=${encodeURIComponent(id)}`, {
       method: 'GET',
       mode: 'cors',
       redirect: 'follow'
     });
-    const text = await r.text();
-    const d = JSON.parse(text);
+    const d = await r.json();
+    addLog('応答: ' + JSON.stringify(d));
 
     if (d.ok) {
       el.className = 'result ok';
@@ -211,9 +185,9 @@ async function doCheckin(id) {
     }, 4000);
 
   } catch(e) {
+    addLog('fetchエラー: ' + e.message);
     el.className = 'result ng';
     el.innerHTML = '通信エラー';
-    showDebug('fetchエラー: ' + e.message + ' / URL: ' + API);
   }
 }
 
@@ -222,13 +196,9 @@ async function updateCount() {
     const r = await fetch(`${API}?action=status`, { mode: 'cors', redirect: 'follow' });
     const d = await r.json();
     document.getElementById('cnt').textContent = d.checked;
-  } catch(e) {}
-}
-
-function showDebug(msg) {
-  const el = document.getElementById('debug');
-  el.style.display = 'block';
-  el.textContent = msg;
+  } catch(e) {
+    addLog('count取得失敗: ' + e.message);
+  }
 }
 </script>
 </body>
