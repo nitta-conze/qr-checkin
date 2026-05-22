@@ -120,10 +120,12 @@ function scanLoop() {
       const code = jsQR(imageData.data, imageData.width, imageData.height, {
         inversionAttempts: 'attemptBoth'
       });
-      if (code && code.data) {
-        addLog('QR検出: ' + code.data);
-        doCheckin(code.data);
-      }
+   if (code && code.data) {
+      doCheckin(code.data);
+      scanning = false;
+      setTimeout(() => { scanning = true; scanLoop(); }, 3000);
+      return;
+    }
     } catch(e) {
       addLog('スキャンエラー: ' + e.message);
     }
