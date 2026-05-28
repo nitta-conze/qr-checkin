@@ -98,9 +98,6 @@ function scanLoop() {
     });
     if (code && code.data) {
       doCheckin(code.data);
-      scanning = false;
-      setTimeout(() => { scanning = true; scanLoop(); }, 3000);
-      return;
     }
   }
   timer = setTimeout(scanLoop, 500);
