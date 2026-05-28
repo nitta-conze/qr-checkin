@@ -24,7 +24,6 @@
   .manual button { padding: 10px 16px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
   .count { text-align: center; padding: 12px; background: white; border-radius: 8px; margin-top: 12px; font-size: 13px; color: #666; }
   .count b { font-size: 20px; color: #1a73e8; }
-  #log { background: #fff; border-radius: 8px; padding: 10px; margin-top: 12px; font-size: 11px; font-family: monospace; word-break: break-all; max-height: 120px; overflow-y: auto; }
 </style>
 </head>
 <body>
@@ -35,7 +34,7 @@
 
   <div id="result" class="result idle">カメラ起動ボタンを押してください</div>
 
-  <button class="btn btn-blue" id="startBtn" onclick="startCamera()">カメラ起動</button>
+  <button class="btn btn-blue" onclick="startCamera()">カメラ起動</button>
   <button class="btn btn-gray" onclick="stopCamera()">停止</button>
 
   <div class="count">チェックイン済: <b id="cnt">—</b> 人</div>
@@ -44,13 +43,11 @@
     <input id="mid" placeholder="ID手入力でチェックイン">
     <button onclick="doCheckin(document.getElementById('mid').value.trim())">送信</button>
   </div>
-
-  <div id="log">ログ: 待機中...</div>
 </div>
 
-<script src="jsQR.js"></script>
+<script src="jsQR.min.js"></script>
 <script>
-const API = 'https://script.google.com/macros/s/AKfycbwXBPSKFGhNmhohk9ervGcaRKqNkqxm8tQaM2-dTfjP2iHB1A3CjnxR0fz8f7v-CXresw/exec';
+const API = 'YOUR_GAS_URL';
 
 let scanning = false;
 let lastId = '';
@@ -58,23 +55,10 @@ let lastTime = 0;
 let stream = null;
 let timer = null;
 
-function addLog(msg) {
-  const el = document.getElementById('log');
-  el.innerHTML = new Date().toLocaleTimeString() + ' ' + msg + '<br>' + el.innerHTML;
-}
-
 async function startCamera() {
-  addLog('カメラ起動開始');
   const el = document.getElementById('result');
   el.className = 'result idle';
   el.innerHTML = 'カメラを起動中...';
-
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    addLog('エラー: getUserMediaが使えません');
-    el.className = 'result ng';
-    el.innerHTML = 'このブラウザはカメラに対応していません';
-    return;
-  }
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -84,21 +68,15 @@ async function startCamera() {
         height: { ideal: 720 }
       }
     });
-    addLog('カメラ取得成功: ' + stream.getVideoTracks()[0].label);
-
     const v = document.getElementById('preview');
     v.srcObject = stream;
     await v.play();
-    addLog('映像再生開始 ' + v.videoWidth + 'x' + v.videoHeight);
-
     scanning = true;
     el.className = 'result idle';
     el.innerHTML = 'QRコードをカメラに向けてください';
     updateCount();
     scanLoop();
-
   } catch(err) {
-    addLog('カメラエラー: ' + err.name + ' / ' + err.message);
     el.className = 'result ng';
     el.innerHTML = 'カメラエラー: ' + err.message;
   }
@@ -114,25 +92,17 @@ function scanLoop() {
     c.height = v.videoHeight;
     const ctx = c.getContext('2d');
     ctx.drawImage(v, 0, 0);
-
-    try {
-      const imageData = ctx.getImageData(0, 0, c.width, c.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: 'attemptBoth'
-      });
-   if (code && code.data) {
+    const imageData = ctx.getImageData(0, 0, c.width, c.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts: 'attemptBoth'
+    });
+    if (code && code.data) {
       doCheckin(code.data);
       scanning = false;
       setTimeout(() => { scanning = true; scanLoop(); }, 3000);
       return;
     }
-    } catch(e) {
-      addLog('スキャンエラー: ' + e.message);
-    }
-  } else {
-    addLog('映像待機中: readyState=' + v.readyState + ' w=' + v.videoWidth);
   }
-
   timer = setTimeout(scanLoop, 500);
 }
 
@@ -143,7 +113,6 @@ function stopCamera() {
   document.getElementById('preview').srcObject = null;
   document.getElementById('result').className = 'result idle';
   document.getElementById('result').innerHTML = 'カメラ起動ボタンを押してください';
-  addLog('カメラ停止');
 }
 
 async function doCheckin(id) {
@@ -155,7 +124,6 @@ async function doCheckin(id) {
   const el = document.getElementById('result');
   el.className = 'result idle';
   el.innerHTML = '処理中...';
-  addLog('チェックイン送信: ' + id);
 
   try {
     const r = await fetch(`${API}?action=checkin&id=${encodeURIComponent(id)}`, {
@@ -164,7 +132,6 @@ async function doCheckin(id) {
       redirect: 'follow'
     });
     const d = await r.json();
-    addLog('応答: ' + JSON.stringify(d));
 
     if (d.ok) {
       el.className = 'result ok';
@@ -184,9 +151,8 @@ async function doCheckin(id) {
     }, 4000);
 
   } catch(e) {
-    addLog('fetchエラー: ' + e.message);
     el.className = 'result ng';
-    el.innerHTML = '通信エラー';
+    el.innerHTML = '通信エラー。接続を確認してください。';
   }
 }
 
@@ -195,9 +161,7 @@ async function updateCount() {
     const r = await fetch(`${API}?action=status`, { mode: 'cors', redirect: 'follow' });
     const d = await r.json();
     document.getElementById('cnt').textContent = d.checked;
-  } catch(e) {
-    addLog('count取得失敗: ' + e.message);
-  }
+  } catch(e) {}
 }
 </script>
 </body>
