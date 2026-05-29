@@ -93,7 +93,7 @@ function scanLoop() {
     const ctx = c.getContext('2d');
     ctx.drawImage(v, 0, 0);
     const imageData = ctx.getImageData(0, 0, c.width, c.height);
-const code = jsQR(imageData.data, imageData.width, imageData.height, {
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
       inversionAttempts: 'attemptBoth'
     });
     if (code && code.data) {
